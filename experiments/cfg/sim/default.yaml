@@ -10,6 +10,7 @@ num_grippers: 1
 preprocess_scale: 1.0
 preprocess_with_table: True
 n_particles: 1000
+n_gripper_particles: null  # subsample gripper_points to this count per gripper (matches PGND's RealGripperDataset n=500); null = no subsample
 gripper_forcing: True
 gripper_points: False
 n_history: 2

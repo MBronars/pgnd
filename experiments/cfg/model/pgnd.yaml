@@ -7,3 +7,8 @@ ckpt: null
 clip_bound: 1.5
 eef_t: [0.0, 0.0, 0.01]
 gripper_radius: 0.04
+
+# Path to a gripper point-cloud template .npz (key 'template_points', (P, 3)),
+# expressed in the EE-local frame. Used by RealGripperDataset in gripper_points
+# mode. If null, the legacy gripper_new.splat asset is loaded instead.
+gripper_template: null

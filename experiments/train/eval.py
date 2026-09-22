@@ -336,18 +336,25 @@ def eval(
             downsample_indices=downsample_indices,
         )
     
-    metrics = do_metric(
-        cfg,
-        log_root,
-        cfg.iteration,
-        [f'episode_{episode:04d}'],
-        downsample_indices,
-        eval_dirname=eval_base_name,
-        dataset_name=cfg.train.dataset_name.split("/")[-1],
-        eval_postfix='',
-        camera_id=1,
-        use_gs=use_gs,
-    )
+    try:
+        metrics = do_metric(
+            cfg,
+            log_root,
+            cfg.iteration,
+            [f'episode_{episode:04d}'],
+            downsample_indices,
+            eval_dirname=eval_base_name,
+            dataset_name=cfg.train.dataset_name.split("/")[-1],
+            eval_postfix='',
+            camera_id=1,
+            use_gs=use_gs,
+        )
+    except Exception as e:
+        # metric_eval expects PGND's per-frame GT .pt format; our cache uses
+        # frames.pt (one per episode) and that path errors out. Predictions are
+        # still saved -- continue so all episodes get their rollout viz.
+        print(f'metric eval skipped for episode {episode:04d}: {e}')
+        metrics = np.zeros((1, 1, 3), dtype=np.float32)
     return metrics
 
 

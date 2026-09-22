@@ -5,6 +5,7 @@ source_dataset_name: null
 num_iterations: 100000
 resume_iteration: 0
 batch_size: 32
+grad_accum: 1  # micro-batches of batch_size per optimizer step
 num_workers: 8
 material_lr: 1e-4
 material_wd: 0.0
@@ -15,6 +16,7 @@ eval_start_episode: 0
 eval_end_episode: 10
 iteration_log_interval: 10
 iteration_save_interval: 1000
+snapshot_every: 10000  # also keep model-<step>.pt every N steps (0 = latest/best/final only)
 iteration_eval_interval: 10000
 loss_factor: 1.0
 loss_factor_v: 0.0
@@ -24,6 +26,13 @@ friction_wd: 0.0
 friction_grad_max_norm: 0.1
 dataset_load_skip_frame: 1
 dataset_skip_frame: 1
+importance_sampling: True
+domain_batches: False  # domain-pure batches, uniform over domains (needs converter metadata 'ranges')
+domain_weighting: uniform  # uniform | episodes (bucket share of batches follows its episode count)
+source_format: pgnd  # pgnd (episode dirs) | pwm_mpm_drag | pwm_dex (read that PWM release directly)
+pwm_root: null  # pwm_mpm_drag / pwm_dex: release root holding train/ test/
+pwm_max_episodes: 0  # smokes only: load this many evenly spaced episodes per split (0 = all)
+exclude_episodes: null  # JSON {"episodes": [episode dir names]} to skip (file mode)
 downsample: False
 use_pv: False
 use_gs: False
