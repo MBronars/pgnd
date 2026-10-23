@@ -27,7 +27,7 @@
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 NAME=${NAME:-folding}
-PWM_ROOT=/data/group_data/katefgroup-ssd/world_model/particle_world_model/releases/pwm-data-v1/folding_8mm
+PWM_ROOT=${PWM_ROOT:-/data/group_data/katefgroup-ssd/world_model/particle_world_model/releases/pwm-data-v1/folding_8mm}
 NPROC=${NPROC:-2}
 BATCH=${BATCH:-4}
 ACCUM=${ACCUM:-$(( 2 / NPROC ))}
