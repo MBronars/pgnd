@@ -6,15 +6,17 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --partition=general
-#SBATCH --gres=gpu:L40S:1
-#SBATCH --mem=200G
+#SBATCH --gres=gpu:1
+#SBATCH --mem=256G
 #SBATCH --time=2-00:00:00
-#SBATCH --exclude=babel-o9-20,babel-o9-24,babel-p9-32,babel-n5-32
+#SBATCH --exclude=babel-o9-20,babel-o9-24,babel-p9-32,babel-n5-32,babel-q5-28
 
 # PGND on the PWM dex release (see train_dex.sh): read directly from the release, no copy.
-# general, one L40S (user 2026-09-22). Local check (A100 40 GB): Sharpa-only
+# general, one GPU (user 2026-09-23). Local check (A100 40 GB): Sharpa-only
 # batches at batch 16, 16 steps, 3 history peaked at 13,828 MiB. RAM: all 16,999 train episodes
-# in memory ~ 5.5M frames x ~2,170 points x 12 B ~ 143 GB (estimate), hence 200G.
+# keeps poses, not points (pwm_dex_source.LazyPoints): loading all 16,999 episodes measured
+# 12.7 GB (parent 3.7 + 8 workers 9.0) in 31 min. Job 10538530 still OOMed at 64G for reasons not
+# yet found, so this asks for 256G and the real peak gets measured from the run itself.
 # Resubmitting resumes from experiments/log/dex/train/ckpt/latest.pt.
 export PATH=/data/user_data/mbronars/.miniconda3/envs/pgnd/bin:$PATH
 cd /data/user_data/mbronars/packages/pgnd
