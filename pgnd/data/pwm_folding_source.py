@@ -32,15 +32,32 @@ N_GRIP = 2
 P_GRIP = 1000
 
 
+RELATIVE_PATH_FIELDS = ('file', 'subset_file', 'template_file', 'geometry_file')   # as gpwm's indexed_episodes.py
+
+
+def resolve_paths(records, root):
+    """pwm-data-v1-compact writes record paths relative to the INDEX.json folder (the release can move between
+    clusters); resolve them as gpwm's loader does. pwm-data-v1 paths are absolute and pass through."""
+    for rec in records:
+        for key in RELATIVE_PATH_FIELDS:
+            if isinstance(rec.get(key), str) and not Path(rec[key]).is_absolute():
+                rec[key] = str(Path(root) / rec[key])
+    return records
+
+
 def load_index(root):
     index = json.load(open(Path(root) / 'INDEX.json'))
     if index.get('domain') != 'folding':
         raise ValueError(f'{root}: domain {index.get("domain")!r}, expected folding')
-    return index['records']
+    return resolve_paths(index['records'], root)
 
 
 def read_clip(rec):
-    """Raw clip in world metres: cloth [T, n_keep, 3] (retained vertices), grippers [T, 2, 1000, 3]."""
+    """Raw clip in world metres: cloth [T, n_keep, 3] (retained vertices), grippers [T, 2, 1000, 3].
+
+    Reads both releases: pwm-data-v1 (every native vertex in particle_pos + the garment's subset file) and
+    pwm-data-v1-compact (the clip holds only the retained vertices, as `positions_cpk`: cloth lossless, the gripper
+    links as rigid bodies within 0.00013 mm), decoded with gpwm's codec as gpwm's loader does."""
     st = Path(rec['file']).stat()
     if (st.st_size, st.st_mtime_ns) != (rec['size'], rec['mtime_ns']):
         raise ValueError(f'Source changed since indexing: {rec["file"]}')
@@ -48,9 +65,17 @@ def read_clip(rec):
         nc = int(z['n_cloth'])
         if not np.isclose(float(z['dt']), 1 / 30):
             raise ValueError(f'{rec["file"]}: dt {float(z["dt"])}')
-        p = z['particle_pos']
+        if 'positions_cpk' in z.files:
+            from .gpwm_compact_codec import loads, unpack_positions
+            p = unpack_positions(loads(z['positions_cpk'].tobytes())['positions'])
+        else:
+            p = z['particle_pos']
     if p.shape != (rec['frames'], nc + N_GRIP * P_GRIP, 3):
         raise ValueError(f'{rec["file"]}: particle_pos {p.shape}')
+    if 'subset_file' not in rec:       # compact clip: n_cloth is already the retained subset
+        if nc != rec['particles'] - N_GRIP * P_GRIP:
+            raise ValueError(f'{rec["file"]}: {nc} cloth vertices vs index {rec["particles"]}')
+        return p[:, :nc], p[:, nc:].reshape(len(p), N_GRIP, P_GRIP, 3)
     st = Path(rec['subset_file']).stat()
     if (st.st_size, st.st_mtime_ns) != (rec['subset_size'], rec['subset_mtime_ns']):
         raise ValueError(f'Subset changed since indexing: {rec["subset_file"]}')

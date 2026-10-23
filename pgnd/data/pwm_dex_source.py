@@ -143,6 +143,10 @@ def load_episodes(root, workers=8, limit=0, prepare=None, part=None):
     if index.get('domain') != 'dex':
         raise ValueError(f'{root}: domain {index.get("domain")!r}, expected dex')
     records = index['records']
+    for rec in records:   # pwm-data-v1-compact: paths relative to the INDEX.json folder (as gpwm's loader resolves them)
+        for key in ('file', 'geometry_file'):
+            if isinstance(rec.get(key), str) and not Path(rec[key]).is_absolute():
+                rec[key] = str(Path(root) / rec[key])
     if limit:
         records = [records[i] for i in np.linspace(0, len(records) - 1, min(limit, len(records))).round().astype(int)]
     if part is not None:   # (rank, world): this process's share, records[rank::world] (PWM's rank sharding)
