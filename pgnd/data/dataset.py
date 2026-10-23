@@ -48,7 +48,9 @@ def preprocess_arrays(cfg, name, xyz, eef_xyz, eef_rot, eef_gripper, gripper_poi
     eef_xyz = eef_xyz.reshape(eef_xyz.shape[0], -1, 3)  # (n_frames, n_grippers, 3)
     eef_xyz = eef_xyz + eef_global_T
 
-    xyz = np.einsum('nij,jk->nik', xyz, R.T)
+    # R is a signed permutation, so applying it in the points' own dtype is exact (an integer R made
+    # einsum promote whole episodes to float64 -- ~2 s per folding clip)
+    xyz = xyz @ R.T.astype(xyz.dtype)
     eef_xyz = np.einsum('nij,jk->nik', eef_xyz, R.T)  # (n_frames, n_grippers, 3)
 
     if eef_rot is not None:  # (n_frames, -1)
@@ -75,7 +77,7 @@ def preprocess_arrays(cfg, name, xyz, eef_xyz, eef_rot, eef_gripper, gripper_poi
         assert gripper_points.shape[1] == cfg.sim.num_grippers, \
             f'gripper_points has {gripper_points.shape[1]} grippers, cfg expects {cfg.sim.num_grippers}'
         assert gripper_points.shape[0] == xyz.shape[0], 'gripper/cloth frame count mismatch'
-        gripper_points = np.einsum('nkpj,jl->nkpl', gripper_points, R.T)
+        gripper_points = gripper_points @ R.T.astype(gripper_points.dtype)
 
     scale = cfg.sim.preprocess_scale
     floor_y = None
@@ -338,9 +340,14 @@ class RealTeleopBatchDataset(Dataset):
                     from .pwm_dex_source import load_episodes, prepare_for_pgnd, to_pgnd_arrays
                     prepare = functools.partial(prepare_for_pgnd, cfg=cfg, dt_frame=dt_frame, dx=self.dx)
                 split = source_split or ('train' if train else 'test')
+                # multi-GPU training: each process loads only its share of the episodes (dex only)
+                world = int(os.environ.get('WORLD_SIZE', 1))
+                part = ((int(os.environ.get('RANK', 0)), world)
+                        if train and world > 1 and cfg.train.source_format == 'pwm_dex' else None)
                 pwm_eps = load_episodes(Path(cfg.train.pwm_root) / split, workers=int(cfg.train.num_workers),
                                         limit=int(cfg.train.get('pwm_max_episodes') or 0),
-                                        **({'prepare': prepare} if prepare is not None else {}))
+                                        **({'prepare': prepare} if prepare is not None else {}),
+                                        **({'part': part} if part is not None else {}))
                 episodes = [e['episode_id'] for e in pwm_eps]
                 direct_domains = [e['bucket'] for e in pwm_eps]
                 print(f'{cfg.train.source_format} {split}: {len(episodes)} episodes from {cfg.train.pwm_root}')

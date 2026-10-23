@@ -140,6 +140,19 @@ class Trainer:
         wp.set_module_options({'fast_math': False})
         wp.config.verify_autograd_array_access = True
 
+        # multi-GPU (torchrun): one process per GPU, each with its own warp device and its own share of the
+        # data; gradients are averaged across processes after backward (see train()), so one step on W GPUs
+        # with batch B equals one step on one GPU with batch B x grad_accum W. Rank 0 validates, logs, saves.
+        self.world = int(os.environ.get('WORLD_SIZE', 1))
+        self.rank = int(os.environ.get('RANK', 0))
+        if self.world > 1:
+            import datetime
+            import torch.distributed as dist
+            # PGND_DIST_BACKEND=gloo + several ranks on one GPU: smoke tests only (NCCL needs one GPU per rank)
+            local_rank = int(os.environ['LOCAL_RANK']) % torch.cuda.device_count()
+            torch.cuda.set_device(local_rank)
+            dist.init_process_group(os.environ.get('PGND_DIST_BACKEND', 'nccl'), timeout=datetime.timedelta(minutes=60))
+            cfg.gpus = [local_rank]
         gpus = [int(gpu) for gpu in cfg.gpus]
         wp_devices = [wp.get_device(f'cuda:{gpu}') for gpu in gpus]
         torch_devices = [torch.device(f'cuda:{gpu}') for gpu in gpus]
@@ -147,22 +160,31 @@ class Trainer:
     
         assert device_count == 1
         self.wp_device = wp_devices[0]
+        # warp arrays made without an explicit device (e.g. wp.from_numpy in sim/utils.py) go to warp's default
+        # device: make it this process's GPU (it is cuda:0 otherwise, wrong for rank 1 of a multi-GPU run)
+        wp.set_device(self.wp_device)
         self.torch_device = torch_devices[0]
 
-        seed = cfg.seed
+        seed = cfg.seed + self.rank   # per-rank data randomness; rank 0's initial weights are broadcast in init_train
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
 
-        torch.autograd.set_detect_anomaly(True)
+        # stock PGND trains with autograd anomaly detection on (a debugging mode: NaN checks on every
+        # backward output, no change to the math); train.detect_anomaly=False skips it
+        torch.autograd.set_detect_anomaly(bool(cfg.train.get('detect_anomaly', True)))
 
         torch.backends.cudnn.benchmark = True
 
         # path
         log_root: Path = root / 'log'
         exp_root: Path = log_root / cfg.train.name
-        mkdir(exp_root, overwrite=cfg.overwrite, resume=cfg.resume)
-        OmegaConf.save(cfg, exp_root / 'hydra.yaml', resolve=True)
+        if self.rank == 0:
+            mkdir(exp_root, overwrite=cfg.overwrite, resume=cfg.resume)
+            OmegaConf.save(cfg, exp_root / 'hydra.yaml', resolve=True)
+        if self.world > 1:
+            torch.distributed.barrier()
+            print(f'nccl ok: rank {self.rank} of {self.world} passed the first barrier', flush=True)
 
         ckpt_root: Path = exp_root / 'ckpt'
         ckpt_root.mkdir(parents=True, exist_ok=True)
@@ -193,6 +215,21 @@ class Trainer:
         if cfg.train.source_format == 'pgnd':   # pwm_mpm_drag / pwm_dex read cfg.train.pwm_root instead
             assert os.path.exists(source_dataset_root)
 
+        if cfg.train.source_format == 'pwm_folding':
+            # folding: clips are read on demand by the loader workers (pgnd/data/pwm_folding_source.py);
+            # one batch = batch_size windows of one clip, motion-weighted starts (PWM folding batches)
+            from pgnd.data.pwm_folding_source import FoldingTrainBatches, load_index
+            records = load_index(Path(cfg.train.pwm_root) / 'train')
+            if cfg.train.get('pwm_record_pick') == 'largest':   # memory checks: the largest garment only
+                records = [max(records, key=lambda r: r['particles'])]
+            elif int(cfg.train.get('pwm_max_episodes') or 0):
+                k = int(cfg.train.pwm_max_episodes)
+                records = [records[i] for i in np.linspace(0, len(records) - 1, min(k, len(records))).round().astype(int)]
+            print(f'pwm_folding train: {len(records)} clips from {cfg.train.pwm_root}, '
+                  f'{min(r["particles"] for r in records)}-{max(r["particles"] for r in records)} points incl. 2,000 gripper')
+            self.dataset = FoldingTrainBatches(cfg, records)
+            return
+
         dataset = RealTeleopBatchDataset(
             cfg, 
             dataset_root=self.log_root / cfg.train.dataset_name / 'state',
@@ -211,7 +248,13 @@ class Trainer:
 
         # motion-weighted importance sampling: up-weight windows with real cloth
         # motion so training isn't dominated by static-cloth frames (spec sec. 4).
-        if cfg.train.domain_batches:
+        if cfg.train.source_format == 'pwm_folding':
+            assert not cfg.train.importance_sampling and not cfg.train.domain_batches, \
+                'pwm_folding draws its own motion-weighted starts (train.pwm_window_motion)'
+            train_loader = DataLoader(self.dataset, batch_size=None, num_workers=cfg.train.num_workers,
+                                      pin_memory=True, persistent_workers=cfg.train.num_workers > 0)
+            print('pwm_folding: one clip per batch, motion-weighted starts', dict(cfg.train.pwm_window_motion))
+        elif cfg.train.domain_batches:
             assert self.dataset.domain_indices is not None, 'domain_batches needs converter metadata ranges'
             weights = self.dataset.sample_weights if cfg.train.importance_sampling else None
             probs = None
@@ -224,7 +267,7 @@ class Trainer:
             else:
                 assert cfg.train.domain_weighting == 'uniform', cfg.train.domain_weighting
             batch_sampler = DomainBatchSampler(self.dataset.domain_indices, cfg.train.batch_size,
-                                               weights=weights, seed=cfg.seed, domain_probs=probs)
+                                               weights=weights, seed=cfg.seed + self.rank, domain_probs=probs)
             train_loader = DataLoader(
                 self.dataset, batch_sampler=batch_sampler,
                 num_workers=cfg.train.num_workers, pin_memory=True)
@@ -274,10 +317,16 @@ class Trainer:
             cfg.train.resume_iteration = int(ckpt['iteration'])
             material.load_state_dict(ckpt['material'])
             self.best_val = float(ckpt.get('best_val', float('inf')))
-            print(f'auto-resume: continuing from iteration {cfg.train.resume_iteration}')
+            self._resume_optimizer = ckpt.get('optimizer')
+            print(f'auto-resume: continuing from iteration {cfg.train.resume_iteration}'
+                  f' (optimizer state {"restored" if self._resume_optimizer is not None else "not in checkpoint: fresh Adam"})')
         elif cfg.model.ckpt:
             ckpt = torch.load(self.log_root / cfg.model.ckpt, map_location=self.torch_device)
             material.load_state_dict(ckpt['material'])
+
+        if self.world > 1:   # identical starting weights (and BN buffers) on every rank
+            for t in list(material.parameters()) + list(material.buffers()):
+                torch.distributed.broadcast(t.data, src=0)
 
         if material_requires_grad:
             material_optimizer = torch.optim.Adam(material.parameters(), lr=cfg.train.material_lr, weight_decay=cfg.train.material_wd)
@@ -285,6 +334,8 @@ class Trainer:
             if cfg.train.resume_iteration > 0:
                 material_lr_scheduler.last_epoch = cfg.train.resume_iteration - 1
                 material_lr_scheduler.step()
+            if getattr(self, '_resume_optimizer', None) is not None:
+                material_optimizer.load_state_dict(self._resume_optimizer)
 
         criterion = nn.MSELoss(reduction='mean')
         criterion.to(self.torch_device)
@@ -484,6 +535,16 @@ class Trainer:
                     print(f'loss.backward() failed: {e.with_traceback()}')
                     continue
 
+            if self.world > 1 and self.material_requires_grad:   # mean gradient over the ranks' windows
+                grads = [p.grad for p in self.material.parameters() if p.grad is not None]
+                flat = torch.cat([g.reshape(-1) for g in grads])
+                torch.distributed.all_reduce(flat)
+                flat /= self.world
+                offset = 0
+                for g in grads:
+                    g.copy_(flat[offset:offset + g.numel()].view_as(g))
+                    offset += g.numel()
+
             if self.material_requires_grad:
                 material_grad_norm = clip_grad_norm_(
                     self.material.parameters(),
@@ -500,6 +561,7 @@ class Trainer:
 
                 msgs.extend([
                     'pred.norm {:.4f}'.format(pred.norm().item()),
+                    'peak {:.1f} GiB'.format(torch.cuda.max_memory_allocated(self.torch_device) / 2**30),
                 ])
 
                 if self.material_requires_grad:
@@ -516,7 +578,12 @@ class Trainer:
                         self.logger.add_scalar('stat/mean_{}'.format(loss_k), loss_v / n_log, step=self.total_step_count)
                 
                 msg = ','.join(msgs)
-                print('[{}]'.format(msg))
+                if self.rank == 0:
+                    print('[{}]'.format(msg))
+                if os.environ.get('PGND_DDP_CHECK'):   # smoke: weights must stay identical across ranks
+                    with torch.no_grad():
+                        cs = sum(float(p.double().sum()) for p in self.material.parameters())
+                    print(f'[ddp-check] rank {self.rank} iteration {iteration + 1} weight checksum {cs:.10f}', flush=True)
                 self.losses_log = defaultdict(int)
             
             if save and not cfg.debug:
@@ -547,6 +614,14 @@ class Trainer:
         windows over the held-out val episodes. With converter domain metadata,
         one domain-pure loader per domain (a fixed random subset of its windows)."""
         cfg = self.cfg
+        if cfg.train.source_format == 'pwm_folding':
+            # a FIXED set of held-out windows, built once: VAL_MAX_BATCHES test clips evenly spaced,
+            # per-episode seeded starts (the PWM evaluation draw)
+            from pgnd.data.pwm_folding_source import fixed_val_batches, load_index
+            records = load_index(Path(cfg.train.pwm_root) / 'test')
+            self.val_loaders = {'all': fixed_val_batches(cfg, records, self.VAL_MAX_BATCHES)}
+            print(f'pwm_folding val: {len(self.val_loaders["all"])} fixed batches of {cfg.train.batch_size} windows')
+            return
         val_dataset = RealTeleopBatchDataset(
             cfg,
             dataset_root=self.log_root / cfg.train.dataset_name / 'state',
@@ -560,17 +635,21 @@ class Trainer:
         if val_dataset.domain_indices is not None:
             self.val_loaders = {}
             for d, idx in sorted(val_dataset.domain_indices.items()):
-                gen = torch.Generator().manual_seed(0)  # fixed subset every call
-                sub = torch.utils.data.Subset(val_dataset, idx.tolist())
+                # a FIXED subset: the same VAL_MAX_BATCHES x batch_size windows every call (a shuffling
+                # loader with one shared generator scored a different subset each call)
+                gen = torch.Generator().manual_seed(0)
+                pick = torch.randperm(len(idx), generator=gen)[:self.VAL_MAX_BATCHES * cfg.train.batch_size]
+                sub = torch.utils.data.Subset(val_dataset, [int(idx[i]) for i in pick.sort().values])
                 self.val_loaders[d] = DataLoader(
-                    sub, batch_size=cfg.train.batch_size, shuffle=True, generator=gen,
+                    sub, batch_size=cfg.train.batch_size, shuffle=False,
                     num_workers=cfg.train.num_workers, pin_memory=True, drop_last=True)
             print('val windows per domain:', {d: len(v) for d, v in val_dataset.domain_indices.items()})
         else:
-            gen = torch.Generator().manual_seed(0)  # fixed subset every call
+            gen = torch.Generator().manual_seed(0)  # a FIXED subset, the same windows every call
+            pick = torch.randperm(len(val_dataset), generator=gen)[:self.VAL_MAX_BATCHES * cfg.train.batch_size]
             self.val_loaders = {'all': DataLoader(
-                val_dataset, batch_size=cfg.train.batch_size, shuffle=True, generator=gen,
-                num_workers=cfg.train.num_workers, pin_memory=True, drop_last=True)}
+                torch.utils.data.Subset(val_dataset, pick.sort().values.tolist()), batch_size=cfg.train.batch_size,
+                shuffle=False, num_workers=cfg.train.num_workers, pin_memory=True, drop_last=True)}
 
     @torch.no_grad()
     def validate(self):
@@ -988,9 +1067,11 @@ class Trainer:
                 self.logger.add_image(f'metric_curve/{metric_name}', img, step=self.total_step_count)
 
     def save_ckpt(self, name, iteration):
+        if self.rank != 0:
+            return
         tmp = self.ckpt_root / (name + '.tmp')
         torch.save({'material': self.material.state_dict(), 'iteration': iteration,
-                    'best_val': self.best_val}, tmp)
+                    'best_val': self.best_val, 'optimizer': self.material_optimizer.state_dict()}, tmp)
         os.replace(tmp, self.ckpt_root / name)
 
     def test_cuda_mem(self):
@@ -1008,7 +1089,10 @@ def main(cfg: DictConfig):
         end_iteration = min(iteration + cfg.train.iteration_eval_interval, cfg.train.num_iterations)
         trainer.train(start_iteration, end_iteration)
 
-        # lightweight validation on held-out episodes (per domain when available)
+        # lightweight validation on held-out episodes (per domain when available); rank 0 only
+        if trainer.rank != 0:
+            torch.distributed.barrier()
+            continue
         val = trainer.validate()
         val_loss = float(np.mean(list(val.values())))
         if val_loss < trainer.best_val:
@@ -1022,7 +1106,11 @@ def main(cfg: DictConfig):
             trainer.logger.add_scalar('val/loss_x_best', trainer.best_val, step=trainer.total_step_count)
             for d, v in val.items():
                 trainer.logger.add_scalar(f'val/loss_x_{d}', v, step=trainer.total_step_count)
+        if trainer.world > 1:
+            torch.distributed.barrier()
     trainer.save_ckpt('final.pt', cfg.train.num_iterations)
+    if trainer.world > 1:
+        torch.distributed.destroy_process_group()
 
 
 if __name__ == '__main__':

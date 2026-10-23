@@ -135,7 +135,7 @@ def _read_shard(args):
     return out
 
 
-def load_episodes(root, workers=8, limit=0, prepare=None):
+def load_episodes(root, workers=8, limit=0, prepare=None, part=None):
     """Every episode of one split, in INDEX.json record order (limit > 0: that many, evenly spaced -- smokes).
     prepare: optional picklable callable(ep) -> dict, run in the worker; the episode then keeps only
     its poses + prepare()'s output (see LazyPoints), not the points."""
@@ -145,6 +145,8 @@ def load_episodes(root, workers=8, limit=0, prepare=None):
     records = index['records']
     if limit:
         records = [records[i] for i in np.linspace(0, len(records) - 1, min(limit, len(records))).round().astype(int)]
+    if part is not None:   # (rank, world): this process's share, records[rank::world] (PWM's rank sharding)
+        records = records[part[0]::part[1]]
     by_file = defaultdict(list)
     for i, rec in enumerate(records):
         by_file[rec['file']].append((i, rec))

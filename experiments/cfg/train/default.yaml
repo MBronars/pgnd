@@ -29,7 +29,7 @@ dataset_skip_frame: 1
 importance_sampling: True
 domain_batches: False  # domain-pure batches, uniform over domains (needs converter metadata 'ranges')
 domain_weighting: uniform  # uniform | episodes (bucket share of batches follows its episode count)
-source_format: pgnd  # pgnd (episode dirs) | pwm_mpm_drag | pwm_dex (read that PWM release directly)
+source_format: pgnd  # pgnd (episode dirs) | pwm_mpm_drag | pwm_dex | pwm_folding (read that PWM release directly)
 pwm_root: null  # pwm_mpm_drag / pwm_dex: release root holding train/ test/
 pwm_max_episodes: 0  # smokes only: load this many evenly spaced episodes per split (0 = all)
 exclude_episodes: null  # JSON {"episodes": [episode dir names]} to skip (file mode)
@@ -37,3 +37,8 @@ downsample: False
 use_pv: False
 use_gs: False
 dataset_non_overwrite: True
+pwm_window_motion:  # pwm_folding: p(start) ∝ (mean cloth step over the future transitions + floor_mm)^alpha (PWM recipe data.window_motion)
+  alpha: 1.0
+  floor_mm: 0.02
+pwm_record_pick: null  # pwm_folding memory checks: 'largest' = train on the largest garment only
+detect_anomaly: True  # stock PGND: autograd anomaly detection on every step (debug checks only; False = faster, same math)
