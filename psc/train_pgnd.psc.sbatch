@@ -2,10 +2,12 @@
 #SBATCH --job-name=pgnd_gpwm
 #SBATCH --account=cis260367p
 #SBATCH --partition=GPU-shared
-#SBATCH --gres=gpu:h100-80:2
+#SBATCH --qos=gpu
+#SBATCH --gres=gpu:l40s-48:2
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
+#SBATCH --mem=320G   # dex peaked ~175 GB host memory on babel; GPU-shared defaults to 63 GB per GPU
 #SBATCH --time=48:00:00
 #SBATCH --output=/ocean/projects/cis260367p/mbronars/projects/GPWM/trainings/pgnd/slurm/%x_%j.out
 #SBATCH --error=/ocean/projects/cis260367p/mbronars/projects/GPWM/trainings/pgnd/slurm/%x_%j.err
@@ -17,7 +19,7 @@
 #   sbatch --job-name=pgnd_folding --export=ALL,RUN=folding psc/train_pgnd.psc.sbatch
 set -uo pipefail
 RUN=${RUN:?set RUN=folding, RUN=dex or RUN=drag}
-PGND_REPO=${PGND_REPO:-/ocean/projects/cis260367p/mbronars/projects/GPWM/code/pgnd}
+PGND_REPO=${PGND_REPO:-/ocean/projects/cis260367p/mbronars/projects/GPWM/baselines/pgnd}
 COMPACT=${COMPACT:-/ocean/projects/cis260367p/mbronars/projects/GPWM/data}         # pwm-data-v1-compact
 RUNS=${RUNS:-/ocean/projects/cis260367p/mbronars/projects/GPWM/trainings/pgnd}
 CONDA_ENV=${CONDA_ENV:-pgnd}

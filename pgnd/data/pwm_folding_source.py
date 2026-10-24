@@ -26,6 +26,7 @@ import numpy as np
 import torch
 
 from .dataset import preprocess_arrays
+from .release_files import same_file
 
 FLIP = np.array([1.0, -1.0, -1.0], np.float32)   # world (z up) -> PGND source axes; preprocess puts world up on +y
 N_GRIP = 2
@@ -59,7 +60,7 @@ def read_clip(rec):
     pwm-data-v1-compact (the clip holds only the retained vertices, as `positions_cpk`: cloth lossless, the gripper
     links as rigid bodies within 0.00013 mm), decoded with gpwm's codec as gpwm's loader does."""
     st = Path(rec['file']).stat()
-    if (st.st_size, st.st_mtime_ns) != (rec['size'], rec['mtime_ns']):
+    if not same_file(st, rec['size'], rec['mtime_ns']):
         raise ValueError(f'Source changed since indexing: {rec["file"]}')
     with np.load(rec['file'], allow_pickle=False) as z:
         nc = int(z['n_cloth'])
@@ -77,7 +78,7 @@ def read_clip(rec):
             raise ValueError(f'{rec["file"]}: {nc} cloth vertices vs index {rec["particles"]}')
         return p[:, :nc], p[:, nc:].reshape(len(p), N_GRIP, P_GRIP, 3)
     st = Path(rec['subset_file']).stat()
-    if (st.st_size, st.st_mtime_ns) != (rec['subset_size'], rec['subset_mtime_ns']):
+    if not same_file(st, rec['subset_size'], rec['subset_mtime_ns']):
         raise ValueError(f'Subset changed since indexing: {rec["subset_file"]}')
     with np.load(rec['subset_file'], allow_pickle=False) as s:
         keep = np.asarray(s['indices'], dtype=np.int64)        # sorted unique vertex ids (PWM _folding_subset)

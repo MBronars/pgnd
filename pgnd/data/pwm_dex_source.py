@@ -23,6 +23,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .release_files import same_file
+
 FLIP = np.array([1.0, -1.0, -1.0], np.float32)   # world -> PGND source axes: preprocess then puts world up on +y
 FLOOR_MARGIN_IN_HAND = 0.10                      # m of clearance between the scene and the grid floor (in-hand tasks)
 
@@ -77,7 +79,7 @@ def in_hand(teacher):
 @lru_cache(maxsize=None)
 def _geometry(path, size, mtime_ns, sha256):
     stat = Path(path).stat()
-    if (stat.st_size, stat.st_mtime_ns) != (size, mtime_ns):
+    if not same_file(stat, size, mtime_ns):
         raise ValueError(f'Dex geometry changed: {path}')
     if hashlib.sha256(Path(path).read_bytes()).hexdigest() != sha256:
         raise ValueError(f'Dex geometry sha256 differs from the index: {path}')
@@ -99,7 +101,7 @@ def _read_shard(args):
     obj_pos, obj_quat = npz_array(path, 'obj_pos'), npz_array(path, 'obj_quat')
     out = []
     for i, rec in wants:
-        if (stat.st_size, stat.st_mtime_ns) != (rec['size'], rec['mtime_ns']):
+        if not same_file(stat, rec['size'], rec['mtime_ns']):
             raise ValueError(f'Source shard changed since indexing: {path}')
         geo = _geometry(rec['geometry_file'], rec['geometry_size'], rec['geometry_mtime_ns'], rec['geometry_sha256'])
         if names != [str(n) for n in geo['link_names']]:

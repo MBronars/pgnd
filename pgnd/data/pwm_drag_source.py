@@ -18,6 +18,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .release_files import same_file
+
 MPM_SHIFT = np.array([-0.75, -0.75, -0.10], np.float32)   # pwm_final_paper CANONICAL_TRANSLATION["mpm"]
 DT = 0.0417
 _FIELDS = ('particle_pos.pyd', 'valid_particles.pyd', 'is_grabbed.pyd', 'drag_active.pyd', 'provenance.json',
@@ -41,7 +43,7 @@ def _read_file(args):
     stat = Path(path).stat()
     keys = {rec['key'] for _, rec in wants}
     for _, rec in wants:
-        if (stat.st_size, stat.st_mtime_ns) != (rec['size'], rec['mtime_ns']):
+        if not same_file(stat, rec['size'], rec['mtime_ns']):
             raise ValueError(f'Source shard changed since indexing: {path}')
     samples = defaultdict(dict)
     with tarfile.open(path) as archive:
