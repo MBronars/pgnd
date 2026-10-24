@@ -7,7 +7,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=320G   # dex peaked ~175 GB host memory on babel; GPU-shared defaults to 63 GB per GPU
+#SBATCH --mem=250G   # dex peaked ~175 GB host memory on babel; GPU-shared: 63 GB/GPU default, 128000M/GPU max
 #SBATCH --time=48:00:00
 #SBATCH --output=/ocean/projects/cis260367p/mbronars/projects/GPWM/trainings/pgnd/slurm/%x_%j.out
 #SBATCH --error=/ocean/projects/cis260367p/mbronars/projects/GPWM/trainings/pgnd/slurm/%x_%j.err

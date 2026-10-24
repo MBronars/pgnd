@@ -43,7 +43,7 @@ checkout) to `$COMPACT/folding_8mm` or `$COMPACT/dex_v2_filtered2`.
 `psc/train_pgnd.psc.sbatch` runs `RUN=folding`, `RUN=dex` or `RUN=drag` with every training setting from
 `experiments/scripts/train_folding.sh` / `train_dex_std.sh` / `train_drag_std.sh` (2 GPUs; 8 / 16 / 16 windows per step; 200,000 steps) and
 links `experiments/log/<name>` to the trainings folder. **Confirm the scheduler lines first**: account `cis260367p`,
-partition `GPU-shared`, `--qos=gpu` and `--gres=gpu:l40s-48:2` (gl001-003: 8 L40S, 192 CPUs, 1 TB) are assumptions, and dex needs a lot of host memory (`--mem=320G`; 175 GB peak on
+partition `GPU-shared`, `--qos=gpu` and `--gres=gpu:l40s-48:2` (gl001-003: 8 L40S, 192 CPUs, 1 TB) are assumptions, and dex needs a lot of host memory (`--mem=250G`, the 2 x 128000M L40S cap; 175 GB peak on
 one process on babel; each of the 2 processes loads half the episodes). Resubmit the same command to resume.
 
 ```bash
