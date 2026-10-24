@@ -24,7 +24,7 @@ DGL's wheel index. The bundled `diff-gaussian-rasterization` is only for renderi
 ```bash
 conda create -n pgnd python=3.10 -y && conda activate pgnd
 pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124
-pip install dgl==2.4.0 -f https://data.dgl.ai/wheels/torch-2.5/cu124/repo.html
+pip install dgl==2.4.0 -f https://data.dgl.ai/wheels/torch-2.4/cu124/repo.html   # DGL's torch-2.4 build: the one the babel env runs with torch 2.5.1
 grep -v -E '^(torch|torchvision|dgl|diff_gaussian_rasterization)==' env/pgnd-2026-10-23.freeze.txt > /tmp/pgnd_rest.txt
 pip install -r /tmp/pgnd_rest.txt          # includes warp-lang 1.1.0 and zstandard (compact folding clips)
 python -c "import torch, warp, dgl, zstandard; warp.init(); print(torch.cuda.get_arch_list())"
