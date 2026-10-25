@@ -38,8 +38,8 @@ checkout) to `$COMPACT/folding_8mm` or `$COMPACT/dex_v2_filtered2`.
 
 ## 4. Launch
 
-`psc/train_pgnd.psc.sbatch` runs `RUN=folding` or `RUN=dex` with every training setting from
-`experiments/scripts/train_folding.sh` / `train_dex_std.sh` (2 GPUs, 8 / 16 windows per step, 200,000 steps) and
+`psc/train_pgnd.psc.sbatch` runs `RUN=folding`, `RUN=dex` or `RUN=drag` with every training setting from
+`experiments/scripts/train_folding.sh` / `train_dex_std.sh` / `train_drag_std.sh` (2 GPUs; 8 / 16 / 16 windows per step; 200,000 steps) and
 links `experiments/log/<name>` to the trainings folder. **Confirm the scheduler lines first**: account `cis260367p`,
 partition `GPU-shared` and `--gres=gpu:h100-80:2` are assumptions, and dex needs a lot of host memory (175 GB peak on
 one process on babel; each of the 2 processes loads half the episodes). Resubmit the same command to resume.
@@ -47,6 +47,7 @@ one process on babel; each of the 2 processes loads half the episodes). Resubmit
 ```bash
 sbatch --job-name=pgnd_folding --export=ALL,RUN=folding psc/train_pgnd.psc.sbatch
 sbatch --job-name=pgnd_dex     --export=ALL,RUN=dex     psc/train_pgnd.psc.sbatch
+sbatch --job-name=pgnd_drag    --export=ALL,RUN=drag    psc/train_pgnd.psc.sbatch   # mpm_drag: re-anchored command sphere + materials
 ```
 
 A run prints `nccl ok: rank r of 2 passed the first barrier` within a minute; if it does not, the node's GPU-to-GPU
