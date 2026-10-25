@@ -11,6 +11,8 @@
 #SBATCH --time=48:00:00
 #SBATCH --output=/ocean/projects/cis260367p/mbronars/projects/GPWM/trainings/pgnd/slurm/%x_%j.out
 #SBATCH --error=/ocean/projects/cis260367p/mbronars/projects/GPWM/trainings/pgnd/slurm/%x_%j.err
+#SBATCH --requeue
+#SBATCH --open-mode=append
 # PGND baseline for gpwm on PSC Bridges-2. RUN=folding (experiments/scripts/train_folding.sh) or RUN=dex
 # (experiments/scripts/train_dex_std.sh): every training setting comes from those scripts, unchanged; this file only
 # sets the PSC paths and scheduler lines. CONFIRM the partition / gres / memory lines on Bridges-2 first (PSC_SETUP.md;
@@ -37,5 +39,13 @@ cd "$PGND_REPO"
 mkdir -p "$RUNS/$NAME" "$RUNS/slurm" experiments/log
 [ -e "experiments/log/$NAME" ] || ln -s "$RUNS/$NAME" "experiments/log/$NAME"
 export NCCL_P2P_DISABLE=${NCCL_P2P_DISABLE:-1}     # babel: first-barrier hangs on some nodes; 0.84M params, no cost
-echo "$(date) job ${SLURM_JOB_ID:-local} $(hostname) RUN=$RUN NAME=$NAME data=$PWM_ROOT run=$RUNS/$NAME"; nvidia-smi -L
+RESTART=${SLURM_RESTART_COUNT:-0}; MAX_RESTARTS=${MAX_RESTARTS:-3}
+echo "$(date) job ${SLURM_JOB_ID:-local} $(hostname) RUN=$RUN NAME=$NAME restart=$RESTART data=$PWM_ROOT run=$RUNS/$NAME"; nvidia-smi -L
 WORKERS=${WORKERS:-3} bash "$SCRIPT" "$@"
+rc=$?
+# A crash requeues the job, which auto-resumes from train/ckpt/latest.pt (as PointWorld's PSC launcher; 2026-10-24 a
+# PointWorld rank took a SIGBUS on this storage). The time limit is not requeued; MAX_RESTARTS stops a crash loop.
+if [ $rc -ne 0 ] && [ -n "${SLURM_JOB_ID:-}" ] && [ "$RESTART" -lt "$MAX_RESTARTS" ]; then
+  echo "$(date) training exited $rc: requeue $((RESTART + 1)) of $MAX_RESTARTS"; scontrol requeue "$SLURM_JOB_ID"
+fi
+exit $rc
