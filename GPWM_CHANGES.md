@@ -40,6 +40,20 @@ sampling where gpwm uses one; PGND's gripper-point mode on every dataset.
 | `experiments/scripts/train_*.sh / .sbatch` | babel launchers; `train_folding.sh` and `train_dex_std.sh` list every setting against the released recipe | |
 | `psc/train_pgnd.psc.sbatch` | PSC launcher (`PSC_SETUP.md`) | |
 
+## mpm_drag (2026-10-25, `experiments/scripts/train_drag_std.sh`)
+
+| setting | Sept run (`train_drag.sh`) | standard run | why |
+|---|---|---|---|
+| sphere | centred on the recorded patch centroid every frame, moved by the patch's achieved step | `sim.drag_sphere=reanchor`: placed on the patch centroid at each drag's first frame, then moved ONLY by the commanded velocity (`grab_velocity`); open between drags | the command is the action gpwm gets and the only one available when planning; a tied sphere follows predicted points (user) |
+| materials | none (released PGND) | `model.material.material_features=3`: log10 E - 5, plasticine flag, fifth value / 1e4 per particle, appended to the PointNet input | material varies between episodes (E 1e4 / 1e5 / 1e6, elastic / plasticine) and gpwm is given it (user) |
+| window sampling | motion^2 importance sampling, 0.1 mm floor | `train.window_motion` alpha 1.0, floor 0.25 mm: gpwm's mpm_drag weighting (probabilities equal to 1.1e-7) | gpwm's own window policy |
+| batch / steps | 1 GPU x 8 x accum 2, 200k | 2 GPUs x 8, 200k (= gpwm 16 x 200k planned) | |
+
+Measured on the release: during a drag the patch follows the command to 0.12 mm per step (median; max 0.64), at most
+8.6 mm accumulated; between drags the patch can move on its own (up to 131 mm in 7 frames), which is why the sphere
+is re-anchored at every drag start. The patch reaches 27.5 mm (median) / 45.8 mm (max) from its centroid; the sphere
+keeps PGND's stock 4 cm radius. Both new options default to the old behaviour (`tied`, 0 channels).
+
 ## Known issue to keep in mind when reading validation
 
 PGND's PointNet uses BatchNorm and validation uses its running statistics, which mostly reflect the last training

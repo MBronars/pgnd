@@ -15,3 +15,4 @@ gripper_forcing: True
 gripper_points: False
 n_history: 2
 uniform: False
+drag_sphere: tied   # mpm_drag forcing sphere: tied = on the recorded patch centroid (Sept 2026 runs); reanchor = on the patch at each drag start, then moved only by the command

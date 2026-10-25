@@ -28,12 +28,15 @@ class PGNDModel(nn.Module):
         self.output_scale = cfg.model.material.output_scale
         self.input_scale = cfg.model.material.input_scale
         self.absolute_y = cfg.model.material.absolute_y
+        # model.material.material_features: extra per-particle input channels (e.g. material properties), appended to
+        # the PointNet input after position / velocity / history. 0 = released PGND.
+        self.n_material_features = int(cfg.model.material.get('material_features', 0) or 0)
 
         self.encoder = PointNetEncoder(
             global_feat=(cfg.model.material.radius <= 0), 
             feature_transform=False, 
             feature_dim=self.feature_dim, 
-            channel=6 * (1 + self.n_history),
+            channel=6 * (1 + self.n_history) + self.n_material_features,
         )
         self.decoder = CondNeRFModel(
             xyz_dim=self.pe_dim,
@@ -69,7 +72,7 @@ class PGNDModel(nn.Module):
         else:
             return torch.cat(encoding, dim=-1)
 
-    def forward(self, x: Tensor, v: Tensor, x_his: Tensor, v_his: Tensor, enabled: Tensor) -> Tensor:
+    def forward(self, x: Tensor, v: Tensor, x_his: Tensor, v_his: Tensor, enabled: Tensor, mat: Tensor = None) -> Tensor:
         # x: (bsz, num_particles, 3)
         # v: (bsz, num_particles, 3)
         bsz = x.shape[0]
@@ -114,7 +117,15 @@ class PGNDModel(nn.Module):
         x_his = x_his.reshape(bsz, num_particles, self.n_history * 3)
         v_his = v_his.reshape(bsz, num_particles, self.n_history * 3)
 
-        feat = torch.cat([x, v, x_his, v_his], dim=-1)  # (bsz, num_particles, 6 * (1 + n_history))
+        feat = [x, v, x_his, v_his]
+        if self.n_material_features:
+            if mat is None:
+                raise ValueError('model.material.material_features > 0 needs per-particle material input')
+            mat = mat.to(x.dtype)
+            if mat.shape[1] < num_particles:            # gripper points appended after the object: no material
+                mat = torch.cat([mat, mat.new_zeros(bsz, num_particles - mat.shape[1], mat.shape[2])], dim=1)
+            feat.append(mat)
+        feat = torch.cat(feat, dim=-1)  # (bsz, num_particles, 6 * (1 + n_history) [+ material])
         feat = feat.permute(0, 2, 1)  # (bsz, 6 * (1 + n_history), num_particles)
         feat, trans, trans_feat = self.encoder(feat, enabled)  # feat: (bsz, feature_dim, num_particles)
 

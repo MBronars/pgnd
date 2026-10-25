@@ -16,7 +16,7 @@
 # Resubmit the same command to resume from latest.pt (weights + optimizer).
 #   sbatch --job-name=pgnd_folding --export=ALL,RUN=folding psc/train_pgnd.psc.sbatch
 set -uo pipefail
-RUN=${RUN:?set RUN=folding or RUN=dex}
+RUN=${RUN:?set RUN=folding, RUN=dex or RUN=drag}
 PGND_REPO=${PGND_REPO:-/ocean/projects/cis260367p/mbronars/projects/GPWM/code/pgnd}
 COMPACT=${COMPACT:-/ocean/projects/cis260367p/mbronars/projects/GPWM/data}         # pwm-data-v1-compact
 RUNS=${RUNS:-/ocean/projects/cis260367p/mbronars/projects/GPWM/trainings/pgnd}
@@ -25,6 +25,7 @@ export NPROC=${NPROC:-2}
 case $RUN in
   folding) NAME=${NAME:-folding}; SCRIPT=experiments/scripts/train_folding.sh;  export PWM_ROOT=$COMPACT/folding_8mm ;;
   dex)     NAME=${NAME:-dex_std}; SCRIPT=experiments/scripts/train_dex_std.sh; export PWM_ROOT=$COMPACT/dex_v2_filtered2 ;;
+  drag)    NAME=${NAME:-drag_std}; SCRIPT=experiments/scripts/train_drag_std.sh; export PWM_ROOT=$COMPACT/mpm_drag ;;
   *) echo "unknown RUN=$RUN" >&2; exit 2 ;;
 esac
 export NAME

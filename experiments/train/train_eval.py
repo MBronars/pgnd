@@ -373,7 +373,8 @@ class Trainer:
                 losses = defaultdict(int)
 
                 init_state, actions, gt_states, gripper_states = next(self.dataloader)
-                x, v, x_his, v_his, clip_bound, enabled, episode_vec = init_state
+                x, v, x_his, v_his, clip_bound, enabled, episode_vec, *_mat = init_state
+                mat = _mat[0].to(self.torch_device) if _mat else None   # model.material.material_features
                 x = x.to(self.torch_device)
                 v = v.to(self.torch_device)
                 x_his = x_his.to(self.torch_device)
@@ -443,7 +444,7 @@ class Trainer:
                             enabled = torch.cat([enabled, gripper_mask[:, step]], dim=1)
                         statics.update_enabled(enabled.cpu())
 
-                    pred = self.material(x, v, x_his, v_his, enabled)
+                    pred = self.material(x, v, x_his, v_his, enabled, mat=mat)
                     x, v = sim(statics, colliders, step, x, v, self.friction.mu.clone()[None].repeat(batch_size, 1), pred)
 
                     if cfg.sim.gripper_forcing:
@@ -672,7 +673,8 @@ class Trainer:
         for batch_idx, (init_state, actions, gt_states, gripper_states) in enumerate(loader):
             if batch_idx >= self.VAL_MAX_BATCHES:
                 break
-            x, v, x_his, v_his, clip_bound, enabled, episode_vec = init_state
+            x, v, x_his, v_his, clip_bound, enabled, episode_vec, *_mat = init_state
+            mat = _mat[0].to(self.torch_device) if _mat else None   # model.material.material_features
             x = x.to(self.torch_device); v = v.to(self.torch_device)
             x_his = x_his.to(self.torch_device); v_his = v_his.to(self.torch_device)
             actions = actions.to(self.torch_device)
@@ -712,7 +714,7 @@ class Trainer:
                 x_in = x.clone()
 
                 if forcing:
-                    pred = self.material(x, v, x_his, v_his, enabled)
+                    pred = self.material(x, v, x_his, v_his, enabled, mat=mat)
                     x, v = sim(statics, colliders, step, x, v,
                                self.friction.mu[None].repeat(batch_size, 1), pred)
                     # kinematic gripper forcing -- mirrors the training loop
@@ -744,7 +746,7 @@ class Trainer:
                         enabled = torch.cat([enabled, gripper_mask[:, step]], dim=1)
                     statics.update_enabled(enabled.cpu())
 
-                    pred = self.material(x, v, x_his, v_his, enabled)
+                    pred = self.material(x, v, x_his, v_his, enabled, mat=mat)
                     x, v = sim(statics, colliders, step, x, v,
                                self.friction.mu[None].repeat(batch_size, 1), pred)
 
@@ -798,7 +800,9 @@ class Trainer:
         )
         init_state, actions, gt_states, gripper_states, downsample_indices = next(eval_dataloader)
 
-        x, v, x_his, v_his, clip_bound, enabled, episode_vec = init_state
+        x, v, x_his, v_his, clip_bound, enabled, episode_vec, *_mat = init_state
+
+        mat = _mat[0].to(self.torch_device) if _mat else None   # model.material.material_features
         x = x.to(self.torch_device)
         v = v.to(self.torch_device)
         x_his = x_his.to(self.torch_device)
@@ -878,7 +882,7 @@ class Trainer:
                         enabled = torch.cat([enabled, gripper_mask[:, step]], dim=1)
                     statics.update_enabled(enabled.cpu())
 
-                pred = self.material(x, v, x_his, v_his, enabled)
+                pred = self.material(x, v, x_his, v_his, enabled, mat=mat)
 
                 if pred.isnan().any():
                     print('pred isnan', pred.min().item(), pred.max().item())

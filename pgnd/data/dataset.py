@@ -319,6 +319,10 @@ class RealTeleopBatchDataset(Dataset):
         self.load_skip_frame = cfg.train.dataset_load_skip_frame
         self.dx = cfg.sim.num_grids[-1]
         self.preprocess_scale = cfg.sim.preprocess_scale
+        self.n_material_features = int(cfg.model.material.get('material_features', 0) or 0)
+        self.cfg_window_motion = cfg.train.get('window_motion', None)
+        if self.n_material_features and cfg.train.get('source_format', 'pgnd') != 'pwm_mpm_drag':
+            raise ValueError('model.material.material_features is implemented for train.source_format=pwm_mpm_drag only')
 
         self.return_downsample_indices = (eval_episode_name is not None)
 
@@ -376,6 +380,7 @@ class RealTeleopBatchDataset(Dataset):
                           f'({len(excluded)} listed in {cfg.train.exclude_episodes})')
 
             episodes_clean = []
+            episodes_mat = []   # per-episode [N, n_material_features] (mpm_drag only)
             episodes_xs = []
             episodes_enabled = []
             episodes_grippers = []
@@ -440,8 +445,14 @@ class RealTeleopBatchDataset(Dataset):
                     frame_motion.append(ep['frame_motion'])
                     dataset_root_episode = episodes[episode_id]
                 elif direct:
-                    info, frames = preprocess_arrays(cfg, episodes[episode_id], **to_pgnd_arrays(pwm_eps[episode_id]),
-                                                     dt_frame=dt_frame, dx=self.dx)
+                    ep_raw = pwm_eps[episode_id]
+                    arrays = (to_pgnd_arrays(ep_raw, sphere=str(cfg.sim.get('drag_sphere', 'tied')))
+                              if cfg.train.source_format == 'pwm_mpm_drag' else to_pgnd_arrays(ep_raw))
+                    info, frames = preprocess_arrays(cfg, episodes[episode_id], **arrays, dt_frame=dt_frame, dx=self.dx)
+                    if self.n_material_features:      # per-particle material channels (model.material.material_features)
+                        if info['num_particles'] != len(ep_raw['mat']):
+                            raise ValueError(f'{episodes[episode_id]}: points left the box; material rows would misalign')
+                        episodes_mat.append(torch.from_numpy(ep_raw['mat']))
                     pwm_eps[episode_id] = None   # release the raw copy
                     dataset_root_episode = episodes[episode_id]
                 else:
@@ -483,6 +494,7 @@ class RealTeleopBatchDataset(Dataset):
             for xs in episodes_xs:
                 episodes_enabled.append(torch.ones(xs.size(1), dtype=torch.bool))
 
+            self.episode_mat = episodes_mat if self.n_material_features else None
             self.episode_xs = episodes_xs              # list of (n_frames_i, n_particles_i, 3)
             v_dt = self.dt * self.interval / self.skip_frame
             self.episode_vs = _FiniteDiff(episodes_xs, v_dt)
@@ -534,6 +546,26 @@ class RealTeleopBatchDataset(Dataset):
         Up-weights windows with real cloth motion so training isn't dominated by
         static-cloth frames.
         """
+        # train.window_motion {alpha, floor_mm}: gpwm's window policy (data/indexed_episodes.py _start_weights):
+        # p(start) ∝ (mean particle step over the window's num_steps PREDICTED transitions, metres + floor)^alpha.
+        # Unset: the Sept-2026 importance sampling below (score^2 over the whole window, 0.1 mm floor).
+        wm = self.cfg_window_motion
+        if wm:
+            alpha, floor_m = float(wm['alpha']), float(wm['floor_mm']) / 1000.0
+            H, S, k = self.n_history, self.num_steps, self.skip_frame
+            weights = []
+            for episode_id, xs in enumerate(self.episode_xs):
+                len_sim = int(self.len_sim_list[episode_id])
+                fm = (self.episode_frame_motion[episode_id] if self.episode_frame_motion is not None
+                      else (xs[1:] - xs[:-1]).norm(dim=-1).mean(dim=-1)).double() / self.preprocess_scale
+                csum = torch.cat([fm.new_zeros(1), fm.cumsum(0)])
+                r = torch.arange(len_sim)
+                lo, hi = r + H * k, r + (H + S) * k                 # transitions current -> last predicted frame
+                score = (csum[hi] - csum[lo]) / (S * k)
+                weights.append((score + floor_m) ** alpha)
+            weights = torch.cat(weights).float()
+            assert weights.shape[0] == self.total_len_sim
+            return weights
         # window spans W consecutive per-frame displacements
         W = (self.num_steps + self.n_history) * self.skip_frame
         weights = []
@@ -601,6 +633,8 @@ class RealTeleopBatchDataset(Dataset):
         clip_bound = self.episode_clip_bound[episode]
         episode_vec = torch.tensor([episode, frame])
         init_state = (x, v, x_his, v_his, clip_bound, enabled, episode_vec)
+        if self.episode_mat is not None:                # 8th element: per-particle material channels
+            init_state = init_state + (self.episode_mat[episode][downsample_indices],)
 
         end_frame = frame + self.num_steps * self.skip_frame + 1
 

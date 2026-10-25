@@ -42,3 +42,4 @@ pwm_window_motion:  # pwm_folding: p(start) ∝ (mean cloth step over the future
   floor_mm: 0.02
 pwm_record_pick: null  # pwm_folding memory checks: 'largest' = train on the largest garment only
 detect_anomaly: True  # stock PGND: autograd anomaly detection on every step (debug checks only; False = faster, same math)
+window_motion: null  # {alpha, floor_mm}: gpwm's window weighting (mpm_drag: alpha 1.0, floor_mm 0.25); null = the Sept-2026 importance weights
