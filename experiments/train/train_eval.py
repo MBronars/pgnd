@@ -215,6 +215,15 @@ class Trainer:
         if cfg.train.source_format == 'pgnd':   # pwm_mpm_drag / pwm_dex read cfg.train.pwm_root instead
             assert os.path.exists(source_dataset_root)
 
+        if cfg.train.source_format == 'pwm_yikai_box':
+            # full yikai: compact episodes read on demand by the loader workers (pgnd/data/pwm_yikai_source.py);
+            # one batch = batch_size windows of one episode, each placed in the fixed box centred on the gripper
+            from pgnd.data.pwm_yikai_source import YikaiTrainBatches, load_records
+            records = load_records(cfg.train.pwm_root, 'train')
+            print(f'pwm_yikai_box train: {len(records)} episodes from {cfg.train.pwm_root}, box {list(cfg.sim.num_grids)}')
+            self.dataset = YikaiTrainBatches(cfg, records)
+            return
+
         if cfg.train.source_format == 'pwm_folding':
             # folding: clips are read on demand by the loader workers (pgnd/data/pwm_folding_source.py);
             # one batch = batch_size windows of one clip, motion-weighted starts (PWM folding batches)
@@ -248,7 +257,13 @@ class Trainer:
 
         # motion-weighted importance sampling: up-weight windows with real cloth
         # motion so training isn't dominated by static-cloth frames (spec sec. 4).
-        if cfg.train.source_format == 'pwm_folding':
+        if cfg.train.source_format == 'pwm_yikai_box':
+            assert not cfg.train.importance_sampling and not cfg.train.domain_batches, \
+                'pwm_yikai_box draws its own uniform starts, one episode per batch'
+            train_loader = DataLoader(self.dataset, batch_size=None, num_workers=cfg.train.num_workers,
+                                      pin_memory=True, persistent_workers=cfg.train.num_workers > 0)
+            print('pwm_yikai_box: one episode per batch, uniform starts, gripper-centred box', list(cfg.sim.num_grids))
+        elif cfg.train.source_format == 'pwm_folding':
             assert not cfg.train.importance_sampling and not cfg.train.domain_batches, \
                 'pwm_folding draws its own motion-weighted starts (train.pwm_window_motion)'
             train_loader = DataLoader(self.dataset, batch_size=None, num_workers=cfg.train.num_workers,
@@ -615,6 +630,12 @@ class Trainer:
         windows over the held-out val episodes. With converter domain metadata,
         one domain-pure loader per domain (a fixed random subset of its windows)."""
         cfg = self.cfg
+        if cfg.train.source_format == 'pwm_yikai_box':
+            from pgnd.data.pwm_yikai_source import fixed_val_batches, load_records
+            records = load_records(cfg.train.pwm_root, 'test')
+            self.val_loaders = {'all': fixed_val_batches(cfg, records, self.VAL_MAX_BATCHES)}
+            print(f'pwm_yikai_box val: {len(self.val_loaders["all"])} fixed batches of {cfg.train.batch_size} windows')
+            return
         if cfg.train.source_format == 'pwm_folding':
             # a FIXED set of held-out windows, built once: VAL_MAX_BATCHES test clips evenly spaced,
             # per-episode seeded starts (the PWM evaluation draw)

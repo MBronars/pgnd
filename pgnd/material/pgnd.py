@@ -31,6 +31,10 @@ class PGNDModel(nn.Module):
         # model.material.material_features: extra per-particle input channels (e.g. material properties), appended to
         # the PointNet input after position / velocity / history. 0 = released PGND.
         self.n_material_features = int(cfg.model.material.get('material_features', 0) or 0)
+        # model.material.mask_disabled: disabled particles (enabled == 0) take no part in the centring, the active-grid
+        # selection or the neighbourhood aggregation, as if absent (full yikai's gripper-centred box disables the objects
+        # outside it). False = released PGND (only the PointNet encoder sees the mask).
+        self.mask_disabled = bool(cfg.model.material.get('mask_disabled', False))
 
         self.encoder = PointNetEncoder(
             global_feat=(cfg.model.material.radius <= 0), 
@@ -85,12 +89,21 @@ class PGNDModel(nn.Module):
         x_his = x_his.detach()
         v_his = v_his.detach()
         
-        x_grid, grid_idxs = get_grid_locations(x, self.num_grids_list, self.dx)
+        en = enabled.to(x.device).bool() if self.mask_disabled else None
+        if en is not None:   # disabled points sit on an enabled point for the grid selection: no extra active cells
+            w = en[..., None].to(x.dtype)
+            x_center = (x * w).sum(1, keepdim=True) / w.sum(1, keepdim=True).clamp(min=1)
+            first = x.gather(1, en.to(torch.uint8).argmax(1)[:, None, None].expand(-1, 1, 3))
+            x_sel = torch.where(en[..., None], x, first.expand_as(x))
+        else:
+            x_sel = x
+        x_grid, grid_idxs = get_grid_locations(x_sel, self.num_grids_list, self.dx)
         x_grid = x_grid.detach()
         grid_idxs = grid_idxs.detach()
 
         # centering
-        x_center = x.mean(1, keepdim=True)
+        if en is None:
+            x_center = x.mean(1, keepdim=True)
         if self.absolute_y:
             x_center[:, :, 1] = 0  # only centering x and z
         x = x - x_center
@@ -135,6 +148,8 @@ class PGNDModel(nn.Module):
             # x_grid.shape: (bsz, num_grids_total, 3)
             dist_pt_grid = torch.cdist(x_grid, x, p=2)
             mask = dist_pt_grid < self.radius  # (bsz, num_grids_total, num_particles)
+            if en is not None:
+                mask = mask & en[:, None, :]
             mask_normed = mask / (mask.sum(dim=-1, keepdim=True) + 1e-5)  # for each grid, normalize the weights
             mask_normed = mask_normed.detach()
             feat = mask_normed @ feat.permute(0, 2, 1)  # (bsz, num_grids_total, feature_dim)

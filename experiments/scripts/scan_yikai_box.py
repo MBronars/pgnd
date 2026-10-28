@@ -65,6 +65,9 @@ def _scan(job):
             return ((hi[:, 0] - c[:, 0] <= hx) & (c[:, 0] - lo[:, 0] <= hx) & (hi[:, 1] - c[:, 1] <= hy)
                     & (c[:, 1] - lo[:, 1] <= hy) & (hi[:, 2] - zfloor <= hz) & (lo[:, 2] - zfloor >= -1e-6))
         grip_out = ~inside(g_lo, g_hi)
+        grip_top = g_hi[:, 2] - zfloor > hz                                     # leaves through the top
+        grip_side = ((g_hi[:, 0] - c[:, 0] > hx) | (c[:, 0] - g_lo[:, 0] > hx) | (g_hi[:, 1] - c[:, 1] > hy)
+                     | (c[:, 1] - g_lo[:, 1] > hy))
         drop_obj = 0
         drop_mv = np.zeros(len(starts), bool)
         drop_near = np.zeros(len(starts), bool)
@@ -82,6 +85,7 @@ def _scan(job):
                                       moved_mm=round(float(disp[j] * 1000), 1)))
         out[name] = dict(windows=len(starts), objects=len(per_obj) * len(starts), drop_obj=drop_obj,
                          drop_mv=int(drop_mv.sum()), drop_near=int(drop_near.sum()), grip_out=int(grip_out.sum()),
+                         grip_top=int(grip_top.sum()), grip_side=int(grip_side.sum()),
                          cases=cases)
     return split, rec['episode_id'], out
 
@@ -99,8 +103,11 @@ def main():
     ap.add_argument('--train-stride', type=int, default=2)
     ap.add_argument('--test-stride', type=int, default=1)
     ap.add_argument('--limit', type=int, default=0)
+    ap.add_argument('--candidates', default=','.join(CANDIDATES), help='boxes in cells, e.g. 70x70x50,70x70x60')
     ARGS = ap.parse_args()
     ARGS.stride = {'train': ARGS.train_stride, 'test': ARGS.test_stride}
+    CANDIDATES.clear()
+    CANDIDATES.update({c: tuple(int(v) for v in c.split('x')) for c in ARGS.candidates.split(',')})
     sys.path.insert(0, ARGS.gpwm)
     from data.indexed_episodes import IndexedEpisodeDataset
     jobs = []
@@ -110,7 +117,8 @@ def main():
         n = len(_DS[split].records)
         jobs += [(split, i) for i in range(min(n, ARGS.limit) if ARGS.limit else n)]
     print(f'{len(jobs)} episodes', flush=True)
-    agg = {s: {k: dict(windows=0, objects=0, drop_obj=0, drop_mv=0, drop_near=0, grip_out=0) for k in CANDIDATES}
+    agg = {s: {k: dict(windows=0, objects=0, drop_obj=0, drop_mv=0, drop_near=0, grip_out=0, grip_top=0, grip_side=0)
+               for k in CANDIDATES}
            for s in ('train', 'test')}
     cases, eps_near = [], {s: set() for s in ('train', 'test')}
     with get_context('fork').Pool(ARGS.workers) as pool:
@@ -130,13 +138,14 @@ def main():
                   totals=agg, report_box=ARGS.report_box,
                   episodes_with_near_drops={s: sorted(v) for s, v in eps_near.items()}, near_drop_cases=cases)
     Path(ARGS.out).write_text(json.dumps(report, indent=1))
-    print('box | split | windows | objects dropped | windows dropping a moving object | ... near the gripper | gripper out')
+    print('box | split | windows | objects dropped | windows dropping a moving object | ... near the gripper | gripper out (top / side)')
     for k in CANDIDATES:
         for s in ('train', 'test'):
             a = agg[s][k]
             w = max(a['windows'], 1)
             print(f'{k} | {s} | {a["windows"]} | {a["drop_obj"] / max(a["objects"], 1):.1%} | {a["drop_mv"] / w:.3%} | '
-                  f'{a["drop_near"]} ({a["drop_near"] / w:.4%}) | {a["grip_out"] / w:.3%}')
+                  f'{a["drop_near"]} ({a["drop_near"] / w:.4%}) | {a["grip_out"] / w:.3%} '
+                  f'({a["grip_top"] / w:.3%} / {a["grip_side"] / w:.3%})')
     print(f'{ARGS.report_box}: {len(cases)} near-gripper moving drops in '
           f'{len(eps_near["train"])} train / {len(eps_near["test"])} test episodes -> {ARGS.out}')
 

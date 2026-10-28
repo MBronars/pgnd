@@ -69,3 +69,11 @@ validation curves (batches switched between very different domains).
 - 2-process mode (gloo, one GPU): weights identical on both ranks every step; resume restores iteration and optimizer.
 - Memory: largest garment 10,000 + 2,000 points at batch 4 x 16 steps: 24.1 GiB; dex batch 8: 6 GiB.
 - Speed on 2 L40S: folding ~0.6-1.2 s/step, dex ~0.35 s/step.
+
+## Table 1 Pushing (rl_push) and Pick and Place (full yikai), 2026-10-27/28
+
+Single-domain specialists for gpwm's Table 1 columns (gpwm `docs/TABLE1_PUSHING_PICKPLACE.md`). Launch steps, the
+yikai box decisions and checks: `BABEL_TABLE1.md`. rl_push: gpwm-loader conversion, 55^3 grid (nothing leaves it).
+Full yikai: a fixed 70 x 70 x 50 box (2 cm) shifted per window onto the gripper, out-of-box objects disabled,
+`model.material.mask_disabled` (default off = released PGND). Also: the per-episode cache is written atomically
+(2-GPU runs on converted episodes could read a half-written `frames.pt`).

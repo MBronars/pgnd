@@ -195,11 +195,18 @@ def preprocess(cfg, dataset_root_episode, source_data_root_episode, dt_frame, dx
         gripper_points = np.stack([gp[k] for k in keys], axis=1)  # (n_frames, num_grippers, P, 3)
     info, frames = preprocess_arrays(cfg, dataset_root_episode.name, xyz, eef_xyz, eef_rot, eef_gripper,
                                      gripper_points, dt_frame, dx)
-    with open(dataset_root_episode / 'info.yaml', 'w') as f:
+    # Written to a temporary name and renamed: with several GPU processes, every rank builds its dataset and can
+    # preprocess the same episode at once; a reader then sees a missing or a complete file, never a partial one
+    # (2026-10-28, rl_push on 2 GPUs: "failed finding central directory"). info.yaml lands before frames.pt, the
+    # file load_cached() treats as the cache marker. Both ranks write identical content, so either rename may win.
+    tmp = f'.tmp{os.getpid()}'
+    with open(dataset_root_episode / f'info.yaml{tmp}', 'w') as f:
         yaml.dump(info, f)
+    os.replace(dataset_root_episode / f'info.yaml{tmp}', dataset_root_episode / 'info.yaml')
     # save the whole episode as a single file (one .pt per episode, not one per
     # frame -- ~400k tiny files would cripple NFS metadata throughput).
-    torch.save(frames, dataset_root_episode / 'frames.pt')
+    torch.save(frames, dataset_root_episode / f'frames.pt{tmp}')
+    os.replace(dataset_root_episode / f'frames.pt{tmp}', dataset_root_episode / 'frames.pt')
     return True  # necessary for success check
 
 

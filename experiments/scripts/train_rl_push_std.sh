@@ -10,6 +10,7 @@
 #   frames       dt 0.05, every frame (20 Hz)                                        -- same frames as gpwm
 #   window       n_history 3 + current given, 16 predicted (released 2 / 5)          -- gpwm: 4 given + 16
 #   points       512 object points (all of them) + the recorded 671-point Franka gripper every frame (Path B)
+#   radius       model.material.radius 0.2 at preprocess_scale 1.0 = 20 cm (released default)
 #   grid         55^3 of 0.02 = 1.1 m box (released 50^3 = 1 m), preprocess_scale 1.0: the widest object extent of
 #                any converted episode is 1.00 m (train; test 0.85 m; 4 train episodes exceed the released 0.92 m usable),
 #                so nothing trained on leaves the grid (as drag). Gripper points outside the grid are masked by PGND
@@ -65,6 +66,7 @@ sim.n_particles=512 \
 sim.n_gripper_particles=671 \
 sim.preprocess_scale=1.0 \
 sim.preprocess_with_table=True \
+model.material.radius=0.2 \
 'model.eef_t=[0.0,0.0,0.0]' \
 train.dataset_load_skip_frame=1 \
 train.dataset_skip_frame=1 \

@@ -13,8 +13,13 @@ Both: world metres, z up, table top at z = 0, the 671-point Franka gripper (hand
 stored as PGND's recorded gripper points, object rows in traj.npz. Works on pwm-data-v1 and on the compact
 release (gpwm's loader reads both).
 
-Axis and layout as convert_three.py: stored s = world * (1, -1, -1); PGND preprocess gives (x, z, -y), world up = +y.
+rl_push, axis and layout as convert_three.py: stored s = world * (1, -1, -1); PGND preprocess gives (x, z, -y).
   <out>/episode_NNNNNN/{traj.npz, gripper_points.npz, eef_traj.txt, eef_rot.txt, eef_gripper.txt, meta.txt}
+yikai, compact (whole scenes are ~230 GB as float32 points; every body is rigid): one pickle per episode,
+  <out>/episode_NNNNNN.cpk  {'positions': gpwm_compact_codec.pack_positions of the WORLD points [T, 671 + No, 3]
+  (gripper rows first: hand 241, left 212, right 218 as bodies -1, -2, -3; objects by their gpwm object id; a body
+  that is not rigid within 0.01 mm is stored losslessly), 'object_ids' [No], 'n_grip', 'frames', 'source'}.
+  Read by pgnd/data/pwm_yikai_source.py (~2 GB for the whole release).
   <out>/metadata.json   train / val episode ranges, counts, provenance, extents
   <out>/episodes.jsonl  one line per episode: idx, split, source id, frames, n_obj, extents
 Train episodes first, then test.
@@ -36,11 +41,14 @@ from pathlib import Path
 
 import numpy as np
 
+CODEC_PATH = Path(__file__).resolve().parents[2] / 'pgnd' / 'data' / 'gpwm_compact_codec.py'   # vendored, numpy only
+
 CONTEXT, FUTURE = 4, 16                                      # gpwm windows: 4 given + 16 predicted
 N_GRIP = 671
 SPLITS = ('train', 'test')
 FLIP = np.array([1.0, -1.0, -1.0], np.float32)               # world -> PGND source axes (see docstring)
 RL_PUSH_EXCL = 'rl_push/manifests/rl_push_exclusions_20260918.json'
+GRIP_LINKS = (241, 212, 218)                                  # hand, left finger, right finger rows (gpwm order)
 
 _DS = {}   # split -> gpwm dataset, built in the parent, inherited by forked workers
 
@@ -59,6 +67,27 @@ def _write_episode(ep_dir: Path, obj: np.ndarray, grip: np.ndarray, obj_ids=None
     np.savetxt(ep_dir / 'eef_gripper.txt', np.zeros((T, 1), np.float32), fmt='%.6e')
     if obj_ids is not None:   # per-row object identity: lets a run drop whole objects (gripper-centred box)
         np.save(ep_dir / 'object_ids.npy', np.asarray(obj_ids, np.int32))
+
+
+def _write_compact(path: Path, obj, grip, obj_ids, src):
+    """Whole-scene yikai episode as rigid bodies (world metres, z up); returns the worst rigid rebuild error (m)."""
+    import importlib.util   # by file: importing the pgnd package needs warp, which the gpwm env has not
+    spec = importlib.util.spec_from_file_location('gpwm_compact_codec', CODEC_PATH)
+    codec = importlib.util.module_from_spec(spec); spec.loader.exec_module(codec)
+    dumps, pack_positions = codec.dumps, codec.pack_positions
+    assert grip.shape[1] == N_GRIP == sum(GRIP_LINKS) and obj.shape[0] == grip.shape[0], (obj.shape, grip.shape)
+    assert np.isfinite(obj).all() and np.isfinite(grip).all()
+    points = np.concatenate([grip, obj], 1).astype(np.float32)
+    body = np.concatenate([np.repeat([-1, -2, -3], GRIP_LINKS), np.asarray(obj_ids, np.int64)])
+    pk = pack_positions(points, body)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(dumps(dict(positions=pk, object_ids=np.asarray(obj_ids, np.int32), n_grip=N_GRIP,
+                                frames=int(points.shape[0]), source=src)))
+    return pk['report']
+
+
+def _first_start(ds):
+    return int(getattr(ds, 'first_start', 10))
 
 
 def _stats(obj, grip):
@@ -91,12 +120,12 @@ def _yikai_unit(split, lo, hi):
     ds = _DS[split]
     out = []
     for rec in ds.records[lo:hi]:
-        b = ds.window(rec, ds.first_start)
+        b = ds.window(rec, _first_start(ds))
         p = b.positions[0].numpy()
         g = (b.object_ids[0] == 1).numpy()
         assert g.sum() == N_GRIP and g[:N_GRIP].all(), (rec['episode_id'], int(g.sum()))
         ids = b.object_ids[0].numpy()
-        out.append((f'{rec["episode_id"]}:first{ds.first_start}', p[:, ~g], p[:, g], ids[~g]))
+        out.append((f'{rec["episode_id"]}:first{_first_start(ds)}', p[:, ~g], p[:, g], ids[~g]))
     return out
 
 
@@ -106,9 +135,14 @@ def _run(job):
     unit_dir = Path(staging) / f'{uid:06d}'
     recs = []
     for k, (src, obj, grip, ids) in enumerate(eps):
-        _write_episode(unit_dir / f'e{k:05d}', obj, grip, ids)
-        recs.append(dict(split=split, source=src, **_stats(obj, grip),
-                         **({} if ids is None else dict(n_objects=int(len(np.unique(ids)))))))
+        extra = {}
+        if domain == 'yikai':
+            rep = _write_compact(unit_dir / f'e{k:05d}.cpk', obj, grip, ids, src)
+            extra = dict(n_objects=int(len(np.unique(ids))), rigid_max_err_m=float(rep['rigid_max_err_m']),
+                         lossless_bodies=rep['lossless_bodies'])
+        else:
+            _write_episode(unit_dir / f'e{k:05d}', obj, grip, ids)
+        recs.append(dict(split=split, source=src, **_stats(obj, grip), **extra))
     return uid, recs
 
 
@@ -168,8 +202,11 @@ def main():
     for uid, _, split, _, _ in jobs:
         r = ranges.setdefault(split, [idx, idx])
         for k, rec in enumerate(results[uid]):
-            os.rename(staging / f'{uid:06d}' / f'e{k:05d}', out / f'episode_{idx:06d}')
-            np.savetxt(out / f'episode_{idx:06d}' / 'meta.txt', np.array([idx, 0.0, rec['frames'] - 1], np.float32))
+            if args.domain == 'yikai':
+                os.rename(staging / f'{uid:06d}' / f'e{k:05d}.cpk', out / f'episode_{idx:06d}.cpk')
+            else:
+                os.rename(staging / f'{uid:06d}' / f'e{k:05d}', out / f'episode_{idx:06d}')
+                np.savetxt(out / f'episode_{idx:06d}' / 'meta.txt', np.array([idx, 0.0, rec['frames'] - 1], np.float32))
             episodes.append(dict(idx=idx, **rec))
             idx += 1
         r[1] = idx
