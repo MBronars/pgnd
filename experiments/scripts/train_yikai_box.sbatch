@@ -18,6 +18,9 @@
 # Checked on PSC (2026-10-28, CPU): batches, box placement, masking. NOT yet run on a GPU: GPU memory (up to 3,584
 # object + 671 gripper points at batch 8 on a 70 x 50 x 70 grid) and speed are unmeasured; run a short smoke first
 # (ITERS=200 EVAL_EVERY=100 NAME=yikai_box_smoke) and check peak GiB in the log.
+# 2026-10-28 (job 10967513): batch 8 per GPU ran out of GPU memory at step ~99 (torch 35.3 GiB of 44.4 GiB on an L40S,
+# then the simulator could not allocate its next 23.5 MB grid on rank 1; one batch = windows of ONE episode, 2,048 to
+# 3,584 object points). Now 4 windows per GPU x 2 accumulation steps x 2 GPUs = the same 16 windows per step.
 # Resubmit to resume from latest.pt (weights + optimizer). This job does not self-chain.
 set -uo pipefail
 export PATH=/data/user_data/mbronars/.miniconda3/envs/pgnd/bin:$PATH
@@ -29,4 +32,4 @@ cd /data/user_data/mbronars/packages/pgnd
 mkdir -p "$RUN" experiments/log
 [ -e "experiments/log/$NAME" ] || ln -s "$RUN" "experiments/log/$NAME"
 echo "job $SLURM_JOB_ID on $(hostname) $(date)"; nvidia-smi -L
-NAME=$NAME PWM_ROOT=$DATA/yikai/episodes NPROC=2 WORKERS=3 bash experiments/scripts/train_yikai_box.sh
+NAME=$NAME PWM_ROOT=$DATA/yikai/episodes NPROC=2 BATCH=4 ACCUM=2 WORKERS=3 bash experiments/scripts/train_yikai_box.sh
